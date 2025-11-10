@@ -12,6 +12,7 @@ if (!BOT_TOKEN) {
 }
 const PORT = process.env.PORT || process.env.RAILWAY_STATIC_PORT || 3001;
 const DATABASE_URL = process.env.DATABASE_URL;
+const BASE_URL = process.env.BASE_URL || 'https://borkstudio';
 const BOT_OWNER_ID = 6910097562; // Special user who gets the "Получить ссылку" flow
 
 // Sponsors (comma-separated links in env SPONSOR_LINKS)
@@ -133,12 +134,13 @@ async function clearUserState(userId) {
   await pool.query(`DELETE FROM user_states WHERE user_id = $1`, [userId]);
 }
 
-async function saveRequest(userId, type, value, link) {
+async function saveRequest(token, userId, type, value, link) {
   if (!pool) return;
-  const id = randomUUID();
+  const id = token;
   await pool.query(
     `INSERT INTO requests (id, user_id, request_type, request_value, generated_link)
-     VALUES ($1, $2, $3, $4, $5)`,
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id, request_type = EXCLUDED.request_type, request_value = EXCLUDED.request_value, generated_link = EXCLUDED.generated_link`,
     [id, userId, type, String(value), link]
   );
 }
@@ -150,6 +152,90 @@ function generateRandomToken(len = 14) {
     out += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
   }
   return out;
+}
+
+// Route: copy page for tokens
+app.get('/c/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!pool) {
+      // serve page that just shows the token and tries to copy the URL
+      const fullUrl = `${BASE_URL}/c/${token}`;
+      return res.send(buildCopyHtml(fullUrl, null));
+    }
+    const { rows } = await pool.query('SELECT * FROM requests WHERE id = $1', [token]);
+    const row = rows[0];
+    if (!row) {
+      const fullUrl = `${BASE_URL}/c/${token}`;
+      return res.status(404).send(buildCopyHtml(fullUrl, null, true));
+    }
+    const fullUrl = `${BASE_URL}/c/${token}`;
+    return res.send(buildCopyHtml(fullUrl, row));
+  } catch (e) {
+    console.error('Error in /c/:token', e);
+    return res.status(500).send('Server error');
+  }
+});
+
+function buildCopyHtml(fullUrl, row, notFound = false) {
+  const displayValue = row ? (row.request_type === 'stars' ? `${row.request_value} звёзд` : row.request_value) : '';
+  const title = notFound ? 'Ссылка не найдена' : 'Скопировать ссылку';
+  const description = notFound ? 'Эта ссылка не найдена или истекла.' : `Нажмите кнопку, чтобы скопировать: ${fullUrl}`;
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <style>
+    :root { --bg: #0b1020; --card: #0f1724; --accent: #00d1ff; --text: #ffffff; }
+    body { margin:0; font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background: linear-gradient(135deg,#071226 0%, #081224 100%); color: var(--text); display:flex; align-items:center; justify-content:center; height:100vh; }
+    .card { background: var(--card); padding:28px; border-radius:14px; box-shadow: 0 10px 30px rgba(2,6,23,0.6); max-width:520px; width:90%; text-align:center; }
+    .title { font-size:22px; font-weight:800; color:var(--accent); margin-bottom:8px; }
+    .desc { font-size:16px; color:#e6f7ff; margin-bottom:18px; }
+    .value { font-size:20px; font-weight:700; color:#fff; background: rgba(255,255,255,0.03); padding:10px 14px; border-radius:8px; margin-bottom:18px; }
+    .btn { display:inline-block; padding:12px 20px; background:var(--accent); color:#022; font-weight:800; border-radius:10px; text-decoration:none; cursor:pointer; }
+    .hint { margin-top:12px; color:#9fbfdc; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">${title}</div>
+    <div class="desc">${description}</div>
+    ${displayValue ? `<div class="value">${displayValue}</div>` : ''}
+    <button class="btn" id="copyBtn">Скопировать ссылку</button>
+    <div class="hint" id="hint">Ожидание...</div>
+  </div>
+  <script>
+    const copyBtn = document.getElementById('copyBtn');
+    const hint = document.getElementById('hint');
+    const textToCopy = ${JSON.stringify(fullUrl)};
+
+    async function tryCopy() {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(textToCopy);
+        } else {
+          const t = document.createElement('textarea');
+          t.value = textToCopy; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+        }
+        hint.textContent = 'Ссылка скопирована в буфер обмена!';
+      } catch (e) {
+        hint.textContent = 'Не удалось скопировать автоматически. Нажмите кнопку.';
+      }
+    }
+
+    // Try to copy on load (may be blocked by browser), then rely on button
+    window.addEventListener('load', () => {
+      tryCopy();
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      await tryCopy();
+    });
+  </script>
+</body>
+</html>`;
 }
 
 function buildSponsorMessage() {
@@ -195,7 +281,7 @@ if (bot) {
         }
       await ctx.answerCbQuery();
       await setUserState(ctx.from.id, 'awaiting_request');
-      await ctx.reply('Отправьте количество звёзд (числом) или ссылку на NFT, которую ��отите забрать.');
+      await ctx.reply('Отправьте количество звёзд (числом) или ссылку на NFT, которую хотите забрать.');
     } catch (err) {
       console.error('Error in get_link action:', err);
     }
@@ -225,12 +311,12 @@ if (bot) {
       }
 
       const token = generateRandomToken(14);
-      const link = `https://borkstudio/${token}`;
+      const link = `${BASE_URL}/c/${token}`;
 
-      await saveRequest(ctx.from.id, type, value, link);
+      await saveRequest(token, ctx.from.id, type, value, link);
       await clearUserState(ctx.from.id);
 
-      await ctx.reply(`Го��ово! Ваша уникальная ссылка: ${link}`);
+      await ctx.reply(`Готово! Ваша уникальная ссылка: ${link}`);
     } catch (err) {
       console.error('Error handling text:', err);
       await ctx.reply('Произошла ошибка. Попробуйте ещё раз.');
