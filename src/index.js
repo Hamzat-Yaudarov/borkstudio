@@ -15,10 +15,44 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const BOT_OWNER_ID = 6910097562; // Special user who gets the "Получить ссылку" flow
 
 // Sponsors (comma-separated links in env SPONSOR_LINKS)
-const SPONSOR_LINKS = (process.env.SPONSOR_LINKS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+function normalizeSponsorLinks(raw) {
+  if (!raw) return [];
+  // Find all occurrences of https://t.me/ and extract following non-comma sequences
+  const matches = [];
+  const prefix = 'https://t.me/';
+  let idx = raw.indexOf(prefix);
+  while (idx !== -1) {
+    // find end at next comma or next https occurrence
+    let end = raw.indexOf(',', idx);
+    const nextPrefix = raw.indexOf(prefix, idx + prefix.length);
+    if (nextPrefix !== -1 && (end === -1 || nextPrefix < end)) {
+      end = nextPrefix;
+    }
+    if (end === -1) end = raw.length;
+    const item = raw.slice(idx, end).trim();
+    if (item) matches.push(item);
+    idx = raw.indexOf(prefix, end);
+  }
+  // fallback: split by commas
+  if (matches.length === 0) {
+    return raw.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  // deduplicate
+  return Array.from(new Set(matches));
+}
+
+const SPONSOR_LINKS = normalizeSponsorLinks(process.env.SPONSOR_LINKS || '');
+
+// Build inline keyboard for sponsor links
+function buildSponsorKeyboard(links) {
+  const buttons = links.map((l, i) => Markup.button.url(`Спонсор ${i + 1}`, l));
+  // arrange two buttons per row
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+  return Markup.inlineKeyboard(rows);
+}
 
 // --- DB ---
 const pool = DATABASE_URL
@@ -141,7 +175,12 @@ if (bot) {
           ])
         );
       } else {
-        await ctx.reply(buildSponsorMessage());
+        const text = 'Пожалуйста, подпишитесь на всех спонсоров и вернитесь.';
+        if (SPONSOR_LINKS.length) {
+          await ctx.reply(text, buildSponsorKeyboard(SPONSOR_LINKS));
+        } else {
+          await ctx.reply(text);
+        }
       }
     } catch (err) {
       console.error('Error in /start:', err);
@@ -156,7 +195,7 @@ if (bot) {
         }
       await ctx.answerCbQuery();
       await setUserState(ctx.from.id, 'awaiting_request');
-      await ctx.reply('Отправьте количество звёзд (числом) или ссылку на NFT, которую хотите забрать.');
+      await ctx.reply('Отправьте количество звёзд (числом) или ссылку на NFT, которую ��отите забрать.');
     } catch (err) {
       console.error('Error in get_link action:', err);
     }
@@ -191,7 +230,7 @@ if (bot) {
       await saveRequest(ctx.from.id, type, value, link);
       await clearUserState(ctx.from.id);
 
-      await ctx.reply(`Готово! Ваша уникальная ссылка: ${link}`);
+      await ctx.reply(`Го��ово! Ваша уникальная ссылка: ${link}`);
     } catch (err) {
       console.error('Error handling text:', err);
       await ctx.reply('Произошла ошибка. Попробуйте ещё раз.');
