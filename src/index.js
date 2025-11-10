@@ -259,7 +259,7 @@ if (bot) {
         await ctx.reply(
           'Привет! Я бот, который помогает забирать NFT-подарок или звёзды у другого пользователя по специальной ссылке.',
           Markup.inlineKeyboard([
-            [Markup.button.callback('Получить ссылку', 'get_link')],
+            [Markup.button.callback('Получит�� ссылку', 'get_link')],
           ])
         );
       } else {
@@ -318,10 +318,40 @@ if (bot) {
       await saveRequest(token, ctx.from.id, type, value, link);
       await clearUserState(ctx.from.id);
 
-      await ctx.reply(`Готово! Ваша уникальная ссылка: ${link}`);
+      await ctx.reply(`Готово! Ваша уникальная ссылка:`,
+        Markup.inlineKeyboard([
+          [Markup.button.url('Открыть ссылку', link)],
+          [Markup.button.callback('Скопировать', `copy_${token}`)]
+        ])
+      );
+      // also send plain link as code block to make copying easier in some clients
+      await ctx.replyWithMarkdownV2(`\`\`${link}\`\``);
     } catch (err) {
       console.error('Error handling text:', err);
       await ctx.reply('Произошла ошибка. Попробуйте ещё раз.');
+    }
+  });
+
+  // Handler for copy button callback
+  bot.action(/^copy_(.+)$/, async (ctx) => {
+    try {
+      const token = ctx.match && ctx.match[1] ? ctx.match[1] : (ctx.callbackQuery && ctx.callbackQuery.data && ctx.callbackQuery.data.split('_')[1]);
+      if (!token) {
+        await ctx.answerCbQuery('Неправильный запрос');
+        return;
+      }
+      const linkToCopy = `${BASE_URL}/c/${token}`;
+      // Inform user (will show as a small toast in client)
+      try { await ctx.answerCbQuery('Ссылка отправлена в чат. Нажмите "Открыть и скопировать"', { show_alert: false }); } catch (e) { }
+
+      // Send a message with a button that opens the copy page (which tries to auto-copy in browser)
+      await ctx.reply('Нажмите кнопку ниже, чтобы открыть страницу и автоматически скопировать ссылку:',
+        Markup.inlineKeyboard([[Markup.button.url('Открыть и скопировать', linkToCopy)]]));
+      // Also send plain code block with the link for manual copy
+      await ctx.replyWithMarkdownV2(`\`\`${linkToCopy}\`\``);
+    } catch (e) {
+      console.error('Error in copy action:', e);
+      try { await ctx.answerCbQuery('Ошибка при ��опытке скопировать ссылку'); } catch (err) {}
     }
   });
 }
