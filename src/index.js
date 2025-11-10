@@ -154,6 +154,8 @@ function generateRandomToken(len = 14) {
   return out;
 }
 
+const app = express();
+
 // Route: copy page for tokens
 app.get('/c/:token', async (req, res) => {
   try {
@@ -325,7 +327,6 @@ if (bot) {
 }
 
 // --- Server (for Railway/health) ---
-const app = express();
 app.get('/', (_req, res) => {
   res.send('Telegram bot is running.');
 });
